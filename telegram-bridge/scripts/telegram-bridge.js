@@ -15,7 +15,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const crypto = require('crypto');
-const { spawnSync } = require('child_process');
+const { spawn, spawnSync } = require('child_process');
 
 // On some networks api.telegram.org over IPv6 hangs on connect while IPv4 is fine.
 require('dns').setDefaultResultOrder('ipv4first');
@@ -24,6 +24,7 @@ const TOKEN = process.env.CLAUDE_TG_BOT_TOKEN || process.env.TELEGRAM_BOT_TOKEN 
 const CHAT_ID = String(process.env.CLAUDE_TG_CHAT_ID || process.env.TELEGRAM_CHAT_ID || '');
 const IDLE_MS = Number(process.env.CLAUDE_TG_IDLE_MIN || 3) * 60000;
 const RETURN_MS = 20000;
+const IDLE_CHECK_MS = 2000;
 const ASK_DEADLINE_MS = 55 * 60000;
 const WARN_BEFORE_MS = 5 * 60000;
 const STATE_DIR = path.join(os.homedir(), '.claude', 'telegram-bridge');
@@ -159,6 +160,15 @@ function run(cmd, args) {
   return String(r.stdout || '');
 }
 
+const WIN_IDLE_TYPE = `Add-Type -TypeDefinition @'
+using System; using System.Runtime.InteropServices;
+public static class TgIdle {
+  [StructLayout(LayoutKind.Sequential)] struct L { public uint cb; public uint t; }
+  [DllImport("user32.dll")] static extern bool GetLastInputInfo(ref L l);
+  public static long Ms() { L l = new L(); l.cb = 8; if (!GetLastInputInfo(ref l)) return 0; return unchecked((uint)Environment.TickCount - l.t); }
+}
+'@`;
+
 // Milliseconds since the last keyboard/mouse input; 0 when unknown, so failures count as "user is here".
 function idleMs() {
   if (process.platform === 'darwin') {
@@ -169,17 +179,38 @@ function idleMs() {
     const ms = Number(run('xprintidle', []).trim());
     return Number.isFinite(ms) ? ms : 0;
   }
-  const ps = `Add-Type -TypeDefinition @'
-using System; using System.Runtime.InteropServices;
-public static class TgIdle {
-  [StructLayout(LayoutKind.Sequential)] struct L { public uint cb; public uint t; }
-  [DllImport("user32.dll")] static extern bool GetLastInputInfo(ref L l);
-  public static long Ms() { L l = new L(); l.cb = 8; if (!GetLastInputInfo(ref l)) return 0; return unchecked((uint)Environment.TickCount - l.t); }
-}
-'@
+  const ps = `${WIN_IDLE_TYPE}
 [TgIdle]::Ms()`;
   const ms = Number(run('powershell', ['-NoProfile', '-NonInteractive', '-Command', ps]).trim());
   return Number.isFinite(ms) ? ms : 0;
+}
+
+// Windows: one long-lived PowerShell reports idle time every second, so "back at the PC" is noticed in ~2 s
+// without paying ~1 s of PowerShell startup on every check.
+let idleWatch = null;
+
+function startIdleWatcher() {
+  if (process.platform !== 'win32' || idleWatch) return;
+  const child = spawn('powershell', ['-NoProfile', '-NonInteractive', '-Command',
+    `${WIN_IDLE_TYPE}
+while ($true) { [TgIdle]::Ms(); Start-Sleep -Milliseconds 1000 }`],
+  { windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] });
+  idleWatch = { ms: null, at: 0 };
+  let buf = '';
+  child.stdout.setEncoding('utf8');
+  child.stdout.on('data', (d) => {
+    const lines = (buf + d).split(/\r?\n/);
+    buf = lines.pop();
+    const v = Number(lines.filter((l) => l.trim()).pop());
+    if (Number.isFinite(v)) { idleWatch.ms = v; idleWatch.at = Date.now(); }
+  });
+  child.on('error', () => {});
+  child.unref();
+  process.on('exit', () => { try { child.kill(); } catch {} });
+}
+
+function currentIdleMs() {
+  return idleWatch && idleWatch.ms !== null && Date.now() - idleWatch.at < 3000 ? idleWatch.ms : idleMs();
 }
 
 async function tg(method, body, timeoutMs = 15000, retries = 1) {
@@ -357,7 +388,7 @@ function releaseWaiter(pid) {
 
 async function pollOnce() {
   let offset = Number(readSafe(OFFSET_FILE)) || 0;
-  const updates = await tg('getUpdates', { offset, timeout: 10, allowed_updates: ['callback_query', 'message'] }, 20000);
+  const updates = await tg('getUpdates', { offset, timeout: 3, allowed_updates: ['callback_query', 'message'] }, 15000);
   const waiters = loadWaiters();
   for (const u of updates) {
     offset = u.update_id + 1;
@@ -390,7 +421,8 @@ async function runWait(waiter, handle) {
   saveWaiter(waiter);
   process.on('exit', () => releaseWaiter(waiter.pid));
   const warn = deadlineWarner(waiter.deadline, waiter.msgIds[0]);
-  let nextIdleCheck = Date.now() + RETURN_MS;
+  startIdleWatcher();
+  let nextIdleCheck = Date.now() + IDLE_CHECK_MS;
   let conflicts = 0;
   try {
     while (Date.now() < waiter.deadline) {
@@ -414,8 +446,8 @@ async function runWait(waiter, handle) {
       for (const u of takeInbox(waiter.pid)) if (await handle(u)) return 'done';
       // CLAUDE_TG_IDLE_MIN=0 is the test mode: always Telegram, no "back at the PC" handoff.
       if (IDLE_MS > 0 && Date.now() >= nextIdleCheck) {
-        if (idleMs() < RETURN_MS) return 'returned';
-        nextIdleCheck = Date.now() + RETURN_MS;
+        if (currentIdleMs() < RETURN_MS) return 'returned';
+        nextIdleCheck = Date.now() + IDLE_CHECK_MS;
       }
     }
     return 'timeout';
@@ -567,5 +599,5 @@ if (require.main === module) {
 
 module.exports = {
   escapeHtml, mdToHtml, truncate, tail, pickOpenStage, extractLastAssistantText, extractSessionTopic,
-  newState, questionText, buildKeyboard, applyCallback, buildAnswers, routeUpdate, idleMs,
+  newState, questionText, buildKeyboard, applyCallback, buildAnswers, routeUpdate, idleMs, startIdleWatcher, currentIdleMs,
 };
