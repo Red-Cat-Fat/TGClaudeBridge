@@ -1,7 +1,10 @@
 {
   "name": "telegram-bridge",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "When you are away from the computer, Claude Code questions come to Telegram with answer buttons, and a reply to 'Claude finished' continues the session.",
   "author": { "name": "Andrey Boronnikov" },
+  "homepage": "https://github.com/Red-Cat-Fat/TGClaudeBridge",
+  "repository": "https://github.com/Red-Cat-Fat/TGClaudeBridge",
+  "license": "MIT",
   "keywords": ["telegram", "notifications", "hooks", "remote"]
 }
