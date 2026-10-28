@@ -1,0 +1,7 @@
+{
+  "name": "telegram-bridge",
+  "version": "1.0.0",
+  "description": "When you are away from the computer, Claude Code questions come to Telegram with answer buttons, and a reply to 'Claude finished' continues the session.",
+  "author": { "name": "Andrey Boronnikov" },
+  "keywords": ["telegram", "notifications", "hooks", "remote"]
+}

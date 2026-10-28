@@ -1,0 +1,16 @@
+{
+  "name": "claude-telegram-bridge",
+  "owner": {
+    "name": "Andrey Boronnikov"
+  },
+  "metadata": {
+    "description": "Claude Code questions and notices in Telegram while you are away from the computer."
+  },
+  "plugins": [
+    {
+      "name": "telegram-bridge",
+      "source": "./telegram-bridge",
+      "description": "Claude Code questions and notices in Telegram while you are away; reply from the phone to continue."
+    }
+  ]
+}

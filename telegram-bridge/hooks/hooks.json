@@ -1,0 +1,28 @@
+{
+  "description": "Telegram bridge: questions with buttons, permission and 'done' notices, replies continue the session",
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "AskUserQuestion",
+        "hooks": [
+          { "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/scripts/telegram-bridge.js\" ask", "timeout": 3600 }
+        ]
+      }
+    ],
+    "Notification": [
+      {
+        "matcher": "permission_prompt",
+        "hooks": [
+          { "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/scripts/telegram-bridge.js\" notify", "timeout": 20 }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          { "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/scripts/telegram-bridge.js\" stop", "timeout": 3600 }
+        ]
+      }
+    ]
+  }
+}
